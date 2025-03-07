@@ -1,62 +1,17 @@
-use pollster::block_on;
-use std::{
-    borrow::Cow, collections::HashMap, io::Write as _, num::NonZero, sync::Arc, time::SystemTime,
-};
-use wgpu::*;
+use std::{io::Write as _, sync::Arc, time::SystemTime};
 use winit::{
     dpi::{LogicalSize, PhysicalSize},
     event_loop::ActiveEventLoop,
     window::{Fullscreen, Window, WindowAttributes},
 };
 
-/// Amount of frames to keep in memory.
-/// This is used to prevent the GPU from blocking the CPU.
-const NUM_FRAMES: usize = 2;
-
-/// The size of the workgroup in the compute shader.
-const WORKGROUP_SIZE_X: u32 = 8;
-const WORKGROUP_SIZE_Y: u32 = 8;
-
-#[repr(C, align(16))] // The internet says 8, but the compiler says 16.
-#[derive(Clone, Copy)]
-struct PointPosition([f32; 2]);
-
-const STARTING_POSITION: &[PointPosition; 4] = &[
-    PointPosition([-0.5, -0.5]), // White
-    PointPosition([0.5, -0.5]),  // Red
-    PointPosition([0.5, 0.5]),   // Green
-    PointPosition([-0.5, 0.5]),  // Blue
-];
-
-struct FrameData {
-    points_position_buffer: Buffer,
-    texture: Texture,
-    bind_group: BindGroup,
-}
-
 // The ordering of this struct is important to the program's shutdown process.
 pub struct Context {
     time_last_print: SystemTime,
     time_last_draw: SystemTime,
-    time_start: SystemTime,
+    _time_start: SystemTime,
 
-    bind_group_layout: BindGroupLayout,
-    frame_data: [FrameData; NUM_FRAMES],
-    frame_data_index: usize,
-
-    queue: Queue,
-    device: Device,
-    compute_pipeline: ComputePipeline,
-
-    // SAFETY:
-    // This MUST be dropped BEFORE window.
-    // Wayland will segfault otherwise.
-    // `surface` drops its strong reference
-    // before it *fully* drops itself.
-    // See [here](https://github.com/gfx-rs/wgpu/pull/6997).
-    surface: Surface<'static>,
     window: Arc<Window>,
-    config: SurfaceConfiguration,
 }
 
 // Public methods
@@ -64,105 +19,27 @@ impl Context {
     /// Creates a new `Context`.
     pub fn new(event_loop: &ActiveEventLoop) -> Self {
         let window = Self::create_window(event_loop);
-        let size = Self::get_window_size(&window);
-
-        let instance = Instance::new(&InstanceDescriptor {
-            backends: Backends::PRIMARY,
-            flags: InstanceFlags::from_env_or_default(),
-            backend_options: BackendOptions::from_env_or_default(),
-        });
-
-        let surface = instance.create_surface(window.clone()).unwrap();
-        let adapter = Self::request_adapter(&instance, &surface);
-        let (device, queue) = Self::request_device(&adapter);
-
-        let config = Self::configure_surface(&surface, &adapter, &device, size);
-        let bind_group_layout = Self::create_bind_group_layout(&device);
-        let frame_data = Self::create_frame_data(&device, &config, &bind_group_layout);
-
-        let compute_pipeline = Self::create_compute_pipeline(&device, &bind_group_layout);
+        let _size = Self::get_window_size(&window);
 
         let time_initial = SystemTime::now();
 
         Self {
             window,
-            surface,
-            config,
-            device,
-            queue,
-            time_start: time_initial,
+            _time_start: time_initial,
             time_last_draw: time_initial,
             time_last_print: time_initial,
-            compute_pipeline,
-            frame_data,
-            frame_data_index: 0,
-            bind_group_layout,
         }
     }
 
     /// Queues drawing of another frame.
     pub fn redraw(&mut self) {
-        let frame = self.surface.get_current_texture().unwrap();
-        let frame_data = &self.frame_data[self.frame_data_index];
-
-        self.update_points_position_buffer(frame_data);
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor { label: None });
-
-        self.dispatch_compute_pass(&mut encoder, frame_data);
-
-        encoder.copy_texture_to_texture(
-            frame_data.texture.as_image_copy(),
-            frame.texture.as_image_copy(),
-            Extent3d {
-                width: self.config.width,
-                height: self.config.height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        self.queue.submit(Some(encoder.finish()));
-        frame.present();
-
         self.update_timing();
-
-        self.frame_data_index = (self.frame_data_index + 1) % self.frame_data.len();
 
         self.window.request_redraw();
     }
 
     /// Resizes the window.
-    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        self.config.width = new_size.width.max(1);
-        self.config.height = new_size.height.max(1);
-        self.surface.configure(&self.device, &self.config);
-
-        for frame_data in self.frame_data.iter_mut() {
-            frame_data.texture = self.device.create_texture(&TextureDescriptor {
-                label: None,
-                size: Extent3d {
-                    width: self.config.width,
-                    height: self.config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-
-            frame_data.bind_group = Self::create_bind_group(
-                &self.device,
-                &self.bind_group_layout,
-                &frame_data.points_position_buffer,
-                &frame_data.texture,
-            )
-        }
-
+    pub fn resize(&mut self, _new_size: PhysicalSize<u32>) {
         self.window.request_redraw();
     }
 
@@ -202,234 +79,6 @@ impl Context {
         size.width = size.width.max(1);
         size.height = size.height.max(1);
         size
-    }
-
-    /// Requests an adapter for the specified instance and surface.
-    fn request_adapter(instance: &Instance, surface: &Surface) -> Adapter {
-        block_on(instance.request_adapter(&RequestAdapterOptions {
-            power_preference: PowerPreference::default(),
-            force_fallback_adapter: false,
-            compatible_surface: Some(surface),
-        }))
-        .unwrap()
-    }
-
-    /// Requests a device and queue from the specified adapter.
-    fn request_device(adapter: &Adapter) -> (Device, Queue) {
-        block_on(adapter.request_device(
-            &DeviceDescriptor {
-                label: None,
-                required_features: Features::empty(),
-                required_limits: Limits::default().using_resolution(adapter.limits()),
-                memory_hints: MemoryHints::MemoryUsage,
-            },
-            None,
-        ))
-        .unwrap()
-    }
-
-    /// Configures the surface with the specified adapter, device, and size.
-    fn configure_surface(
-        surface: &Surface,
-        adapter: &Adapter,
-        device: &Device,
-        size: PhysicalSize<u32>,
-    ) -> SurfaceConfiguration {
-        let mut config = surface
-            .get_default_config(adapter, size.width, size.height)
-            .unwrap();
-        config.format = TextureFormat::Rgba8Unorm;
-        config.usage |= TextureUsages::COPY_DST;
-        config.present_mode = if std::env::args().any(|arg| arg == "--turbo") {
-            PresentMode::AutoNoVsync
-        } else {
-            PresentMode::AutoVsync
-        };
-        surface.configure(device, &config);
-        config
-    }
-
-    /// Creates a bind group layout for the device.
-    fn create_bind_group_layout(device: &Device) -> BindGroupLayout {
-        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba8Unorm,
-                        view_dimension: TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    /// Creates a bind group for the specified device, bind group layout, points position buffer, and texture view.
-    fn create_bind_group(
-        device: &Device,
-        bind_group_layout: &BindGroupLayout,
-        points_position_buffer: &Buffer,
-        texture: &Texture,
-    ) -> BindGroup {
-        let texture_view = texture.create_view(&TextureViewDescriptor::default());
-
-        device.create_bind_group(&BindGroupDescriptor {
-            label: None,
-            layout: bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: points_position_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(&texture_view),
-                },
-            ],
-        })
-    }
-
-    /// Creates the frame data buffers for the specified device, configuration, and bind group layout.
-    fn create_frame_data(
-        device: &Device,
-        config: &SurfaceConfiguration,
-        bind_group_layout: &BindGroupLayout,
-    ) -> [FrameData; NUM_FRAMES] {
-        std::array::from_fn(|_| {
-            let points_position_buffer = device.create_buffer(&BufferDescriptor {
-                label: None,
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                size: std::mem::size_of_val(STARTING_POSITION) as u64,
-                mapped_at_creation: false,
-            });
-
-            let texture = device.create_texture(&TextureDescriptor {
-                label: None,
-                size: Extent3d {
-                    width: config.width,
-                    height: config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-
-            let bind_group = Self::create_bind_group(
-                device,
-                bind_group_layout,
-                &points_position_buffer,
-                &texture,
-            );
-
-            FrameData {
-                points_position_buffer,
-                texture,
-                bind_group,
-            }
-        })
-    }
-
-    /// Creates a compute pipeline for the specified device and bind group layout.
-    fn create_compute_pipeline(
-        device: &Device,
-        bind_group_layout: &BindGroupLayout,
-    ) -> ComputePipeline {
-        let compute_shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: None,
-            source: ShaderSource::Glsl {
-                shader: Cow::Borrowed(include_str!("shader.comp.glsl")),
-                stage: naga::ShaderStage::Compute,
-                defines: HashMap::default(),
-            },
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[bind_group_layout],
-            push_constant_ranges: &[],
-        });
-
-        device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: None,
-            layout: Some(&pipeline_layout),
-            module: &compute_shader,
-            entry_point: None,
-            compilation_options: PipelineCompilationOptions::default(),
-            cache: None,
-        })
-    }
-
-    /// Updates the points position buffer with newly calculated positions.
-    fn update_points_position_buffer(&self, frame_data: &FrameData) {
-        let r = -SystemTime::now()
-            .duration_since(self.time_start)
-            .unwrap()
-            .as_secs_f32()
-            * std::f32::consts::TAU
-            / 4.0;
-        let mut sin_r = r.sin();
-        let mut cos_r = r.cos();
-        let scale_factor = (sin_r + 1.0) / 2.0;
-        sin_r *= scale_factor;
-        cos_r *= scale_factor;
-
-        let mut mapped = self
-            .queue
-            .write_buffer_with(
-                &frame_data.points_position_buffer,
-                0,
-                NonZero::new(frame_data.points_position_buffer.size()).unwrap(),
-            )
-            .unwrap();
-
-        let mapped_slice = unsafe {
-            std::slice::from_raw_parts_mut(
-                mapped.as_mut_ptr().cast::<PointPosition>(),
-                (frame_data.points_position_buffer.size()
-                    / std::mem::size_of::<PointPosition>() as u64) as usize,
-            )
-        };
-
-        for (i, pos) in STARTING_POSITION.iter().enumerate() {
-            mapped_slice[i].0 = [
-                (pos.0[0] * cos_r - pos.0[1] * sin_r),
-                (pos.0[0] * sin_r + pos.0[1] * cos_r),
-            ];
-        }
-    }
-
-    /// Dispatches the compute pass for the specified encoder and frame data.
-    fn dispatch_compute_pass(&self, encoder: &mut CommandEncoder, frame_data: &FrameData) {
-        let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
-
-        compute_pass.set_pipeline(&self.compute_pipeline);
-        compute_pass.set_bind_group(0, &frame_data.bind_group, &[]);
-
-        let dispatch_x = self.config.width.div_ceil(WORKGROUP_SIZE_X);
-        let dispatch_y = self.config.height.div_ceil(WORKGROUP_SIZE_Y);
-
-        compute_pass.dispatch_workgroups(dispatch_x, dispatch_y, 1);
     }
 
     /// Updates the timing information for the context.

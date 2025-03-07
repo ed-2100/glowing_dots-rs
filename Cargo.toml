@@ -13,6 +13,7 @@ pollster = "0.4"
 bytemuck = "1.21"
 glam = "0.29"
 encase = "0.10"
+vulkanalia = "0.28"
 
 [dependencies.image]
 version = "0.25"
