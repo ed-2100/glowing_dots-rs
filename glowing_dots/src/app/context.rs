@@ -54,6 +54,10 @@ impl Context {
     }
 }
 
+// Private vulkan methods
+impl Context {
+}
+
 // Private methods
 impl Context {
     /// Creates a new window.
