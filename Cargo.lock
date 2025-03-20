@@ -458,7 +458,7 @@ dependencies = [
  "anyhow",
  "env_logger",
  "log",
- "vulkanalia",
+ "raw-window-handle",
  "winit",
 ]
 
@@ -470,7 +470,7 @@ dependencies = [
  "env_logger",
  "libloading",
  "log",
- "vulkanalia",
+ "vulkanalia-sys",
  "winit",
 ]
 
@@ -1275,15 +1275,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vulkanalia"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5845f71462cc3166d76f9049717f6f601586a711fdbbd943b19a50a19e6a773e"
-dependencies = [
- "vulkanalia-sys",
-]
 
 [[package]]
 name = "vulkanalia-sys"
