@@ -470,6 +470,7 @@ dependencies = [
  "env_logger",
  "libloading",
  "log",
+ "raw-window-handle",
  "vulkanalia-sys",
  "winit",
 ]

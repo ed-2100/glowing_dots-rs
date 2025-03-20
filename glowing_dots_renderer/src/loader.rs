@@ -8,6 +8,7 @@ use vulkanalia_sys as vk;
 pub struct InnerLoader {
     pub vkCreateInstance: vk::PFN_vkCreateInstance,
     pub vkDestroyInstance: vk::PFN_vkDestroyInstance,
+    pub vkGetInstanceProcAddr: vk::PFN_vkGetInstanceProcAddr,
     #[allow(unused)]
     library: libloading::Library,
 }
@@ -24,6 +25,7 @@ impl InnerLoader {
             Ok(InnerLoader {
                 vkCreateInstance: Self::get(&lib, b"vkCreateInstance")?,
                 vkDestroyInstance: Self::get(&lib, b"vkDestroyInstance")?,
+                vkGetInstanceProcAddr: Self::get(&lib, b"vkGetInstanceProcAddr")?,
                 library: lib,
             })
         }

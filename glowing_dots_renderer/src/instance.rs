@@ -1,12 +1,17 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use crate::{allocator::ALLOCATION_CALLBACKS, helpers::check_result, loader::Loader};
 use anyhow::Result;
 use vulkanalia_sys as vk;
 
-pub struct InnerInstance {
-    instance: vk::Instance,
+use crate::{ALLOCATION_CALLBACKS, Loader, check_result};
+
+#[allow(non_snake_case)]
+#[derive(Debug)]
+pub(crate) struct InnerInstance {
+    pub(crate) instance: vk::Instance,
     loader: Loader,
+    pub vkCreateWaylandSurfaceKHR: Option<vk::PFN_vkCreateWaylandSurfaceKHR>,
+    pub vkDestroySurfaceKHR: Option<vk::PFN_vkDestroySurfaceKHR>,
 }
 
 impl InnerInstance {
@@ -21,9 +26,21 @@ impl InnerInstance {
             ))?
         };
 
-        Ok(InnerInstance {
-            instance,
-            loader: loader.clone(),
+        Ok(unsafe {
+            InnerInstance {
+                vkCreateWaylandSurfaceKHR: (loader.vkGetInstanceProcAddr)(
+                    instance,
+                    c"vkCreateWaylandSurfaceKHR".as_ptr(),
+                )
+                .map(|f| std::mem::transmute(f)),
+                vkDestroySurfaceKHR: (loader.vkGetInstanceProcAddr)(
+                    instance,
+                    c"vkDestroySurfaceKHR".as_ptr(),
+                )
+                .map(|f| std::mem::transmute(f)),
+                instance,
+                loader: loader.clone(),
+            }
         })
     }
 }
@@ -34,8 +51,9 @@ impl Drop for InnerInstance {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Instance {
-    inner: Arc<InnerInstance>,
+    pub(crate) inner: Arc<InnerInstance>,
 }
 
 impl Instance {
@@ -43,14 +61,6 @@ impl Instance {
         Ok(Instance {
             inner: Arc::new(InnerInstance::new(loader, create_info)?),
         })
-    }
-}
-
-impl Deref for Instance {
-    type Target = InnerInstance;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.as_ref()
     }
 }
 
