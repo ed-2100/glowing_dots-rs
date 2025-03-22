@@ -1,0 +1,13 @@
+[package]
+name = "glowing_dots_macros"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+quote = "*"
+syn = "*"
+proc-macro2 = "*"
+
+[lib]
+proc-macro = true
+

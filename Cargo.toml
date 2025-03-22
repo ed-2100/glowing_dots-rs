@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["generator", "glowing_dots", "glowing_dots_renderer"]
+members = ["generator", "glowing_dots", "glowing_dots_macros", "glowing_dots_renderer"]
 
 # do not optimize proc-macro crates = faster builds from scratch
 [profile.dev.build-override]

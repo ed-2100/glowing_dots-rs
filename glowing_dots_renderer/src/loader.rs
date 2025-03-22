@@ -1,34 +1,47 @@
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::Result;
+use libloading::Library;
 use vulkanalia_sys as vk;
 
 #[allow(non_snake_case)]
 #[derive(Debug)]
+pub struct LoaderFunctions {
+    pub vkCreateInstance: Option<vk::PFN_vkCreateInstance>,
+    pub vkDestroyInstance: Option<vk::PFN_vkDestroyInstance>,
+    pub vkGetInstanceProcAddr: Option<vk::PFN_vkGetInstanceProcAddr>,
+}
+
+impl LoaderFunctions {
+    unsafe fn get<T: Copy>(lib: &Library, symbol: &[u8]) -> Option<T> {
+        unsafe { lib.get::<T>(symbol).ok().map(|f| *f) }
+    }
+
+    fn new(lib: &Library) -> LoaderFunctions {
+        unsafe {
+            LoaderFunctions {
+                vkCreateInstance: Self::get(&lib, b"vkCreateInstance"),
+                vkDestroyInstance: Self::get(&lib, b"vkDestroyInstance"),
+                vkGetInstanceProcAddr: Self::get(&lib, b"vkGetInstanceProcAddr"),
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct InnerLoader {
-    pub vkCreateInstance: vk::PFN_vkCreateInstance,
-    pub vkDestroyInstance: vk::PFN_vkDestroyInstance,
-    pub vkGetInstanceProcAddr: vk::PFN_vkGetInstanceProcAddr,
-    #[allow(unused)]
-    library: libloading::Library,
+    pub library: Library,
+    pub functions: LoaderFunctions,
 }
 
 impl InnerLoader {
-    unsafe fn get<T: Copy>(lib: &libloading::Library, symbol: &[u8]) -> Result<T> {
-        unsafe { Ok(*lib.get::<T>(symbol)?) }
-    }
-
     fn new() -> Result<InnerLoader> {
-        let lib = unsafe { libloading::Library::new("libvulkan.so.1")? };
-        
-        unsafe {
-            Ok(InnerLoader {
-                vkCreateInstance: Self::get(&lib, b"vkCreateInstance")?,
-                vkDestroyInstance: Self::get(&lib, b"vkDestroyInstance")?,
-                vkGetInstanceProcAddr: Self::get(&lib, b"vkGetInstanceProcAddr")?,
-                library: lib,
-            })
-        }
+        let lib = unsafe { Library::new("libvulkan.so.1")? };
+
+        Ok(InnerLoader {
+            functions: LoaderFunctions::new(&lib),
+            library: lib,
+        })
     }
 }
 
@@ -65,8 +78,11 @@ mod tests {
 
         let mut instance: vk::Instance = Default::default();
 
+        let create_instance = loader.functions.vkCreateInstance.unwrap();
+        let destroy_instance = loader.functions.vkDestroyInstance.unwrap();
+
         unsafe {
-            check_result((loader.vkCreateInstance)(
+            check_result((create_instance)(
                 &vk::InstanceCreateInfo {
                     s_type: vk::StructureType::INSTANCE_CREATE_INFO,
                     application_info: &vk::ApplicationInfo {
@@ -84,7 +100,7 @@ mod tests {
         }
 
         unsafe {
-            (loader.vkDestroyInstance)(instance, null());
+            (destroy_instance)(instance, null());
         }
 
         Ok(())
