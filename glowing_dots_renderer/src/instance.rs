@@ -1,12 +1,8 @@
 use anyhow::Result;
 use std::{
-    collections::BTreeSet,
-    ffi::{CStr, c_void},
-    mem::offset_of,
-    ptr::null,
-    sync::Arc,
+    collections::BTreeSet, ffi::{c_void, CStr}, mem::offset_of, ptr::null, sync::Arc
 };
-use vulkanalia_sys::{self as vk, ApplicationInfo};
+use vulkanalia_sys as vk;
 
 use crate::{ALLOCATION_CALLBACKS, Loader, check_result};
 
@@ -22,7 +18,7 @@ macro_rules! define_instance_functions {
 
         impl InstanceFunctions {
             fn new(loader: &Loader, instance: vk::Instance) -> Self {
-                let get_proc_addr = loader.functions.vkGetInstanceProcAddr.unwrap();
+                let get_proc_addr = loader.inner.functions.vkGetInstanceProcAddr.unwrap();
                 unsafe {
                     Self {
                         $(
@@ -49,14 +45,27 @@ define_instance_functions! {
 
     // ----- VK_KHR_wayland_surface
     vkCreateWaylandSurfaceKHR,
-    vkGetPhysicalDeviceWaylandPresentationSupportKHR
+    vkGetPhysicalDeviceWaylandPresentationSupportKHR,
+
+    // ----- VK_EXT_debug_utils -----
+    vkCmdBeginDebugUtilsLabelEXT,
+    vkCmdEndDebugUtilsLabelEXT,
+    vkCmdInsertDebugUtilsLabelEXT,
+    vkCreateDebugUtilsMessengerEXT,
+    vkDestroyDebugUtilsMessengerEXT,
+    vkQueueBeginDebugUtilsLabelEXT,
+    vkQueueEndDebugUtilsLabelEXT,
+    vkQueueInsertDebugUtilsLabelEXT,
+    vkSetDebugUtilsObjectNameEXT,
+    vkSetDebugUtilsObjectTagEXT,
+    vkSubmitDebugUtilsMessageEXT
 }
 
 #[allow(non_snake_case)]
 #[derive(Debug)]
 pub(crate) struct InnerInstance {
-    pub instance: vk::Instance,
     pub loader: Loader,
+    pub instance: vk::Instance,
     pub functions: InstanceFunctions,
     destroy_instance: vk::PFN_vkDestroyInstance,
 }
@@ -83,7 +92,7 @@ pub struct InstanceBuilder<'a> {
 impl<'a> InstanceBuilder<'a> {
     pub fn new() -> Self {
         Self {
-            app_info: ApplicationInfo {
+            app_info: vk::ApplicationInfo {
                 application_name: c"No Name".as_ptr(),
                 application_version: vk::make_version(0, 0, 0),
                 engine_name: c"No Engine".as_ptr(),
@@ -108,8 +117,8 @@ impl<'a> InstanceBuilder<'a> {
             .map(|s| s.as_ptr())
             .collect::<Vec<_>>();
 
-        let create_instance = loader.functions.vkCreateInstance.unwrap();
-        let destroy_instance = loader.functions.vkDestroyInstance.unwrap();
+        let create_instance = loader.inner.functions.vkCreateInstance.unwrap();
+        let destroy_instance = loader.inner.functions.vkDestroyInstance.unwrap();
 
         unsafe {
             check_result((create_instance)(

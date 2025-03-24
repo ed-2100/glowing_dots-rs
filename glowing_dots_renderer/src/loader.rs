@@ -1,35 +1,44 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Result;
 use libloading::Library;
-use vulkanalia_sys as vk;
 
-#[allow(non_snake_case)]
-#[derive(Debug)]
-pub struct LoaderFunctions {
-    pub vkCreateInstance: Option<vk::PFN_vkCreateInstance>,
-    pub vkDestroyInstance: Option<vk::PFN_vkDestroyInstance>,
-    pub vkGetInstanceProcAddr: Option<vk::PFN_vkGetInstanceProcAddr>,
-}
+macro_rules! define_loader_functions {
+    ($($fname:ident),*) => {
+        #[allow(non_snake_case)]
+        #[derive(Debug)]
+        pub struct LoaderFunctions {
+            $(
+                pub $fname: Option<paste::paste! { ::vulkanalia_sys::[<PFN_ $fname>] }>,
+            )*
+        }
 
-impl LoaderFunctions {
-    unsafe fn get<T: Copy>(lib: &Library, symbol: &[u8]) -> Option<T> {
-        unsafe { lib.get::<T>(symbol).ok().map(|f| *f) }
-    }
+        impl LoaderFunctions {
+            unsafe fn get<T: Copy>(lib: &Library, symbol: &[u8]) -> Option<T> {
+                unsafe { lib.get::<T>(symbol).ok().map(|f| *f) }
+            }
 
-    fn new(lib: &Library) -> LoaderFunctions {
-        unsafe {
-            LoaderFunctions {
-                vkCreateInstance: Self::get(&lib, b"vkCreateInstance"),
-                vkDestroyInstance: Self::get(&lib, b"vkDestroyInstance"),
-                vkGetInstanceProcAddr: Self::get(&lib, b"vkGetInstanceProcAddr"),
+            fn new(lib: &Library) -> Self {
+                unsafe {
+                    Self {
+                        $(
+                            $fname: Self::get(&lib, stringify!($fname).as_bytes()),
+                        )*
+                    }
+                }
             }
         }
-    }
+    };
+}
+
+define_loader_functions! {
+    vkCreateInstance,
+    vkDestroyInstance,
+    vkGetInstanceProcAddr
 }
 
 #[derive(Debug)]
-pub struct InnerLoader {
+pub(crate) struct InnerLoader {
     pub library: Library,
     pub functions: LoaderFunctions,
 }
@@ -47,7 +56,7 @@ impl InnerLoader {
 
 #[derive(Clone, Debug)]
 pub struct Loader {
-    inner: Arc<InnerLoader>,
+    pub(crate) inner: Arc<InnerLoader>,
 }
 
 impl Loader {
@@ -58,19 +67,12 @@ impl Loader {
     }
 }
 
-impl Deref for Loader {
-    type Target = InnerLoader;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.as_ref()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::helpers::check_result;
     use std::ptr::null;
+    use vulkanalia_sys as vk;
 
     #[test]
     fn test_new() -> Result<()> {
@@ -78,8 +80,8 @@ mod tests {
 
         let mut instance: vk::Instance = Default::default();
 
-        let create_instance = loader.functions.vkCreateInstance.unwrap();
-        let destroy_instance = loader.functions.vkDestroyInstance.unwrap();
+        let create_instance = loader.inner.functions.vkCreateInstance.unwrap();
+        let destroy_instance = loader.inner.functions.vkDestroyInstance.unwrap();
 
         unsafe {
             check_result((create_instance)(
