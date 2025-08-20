@@ -1,7 +1,5 @@
 use pollster::block_on;
-use std::{
-    borrow::Cow, collections::HashMap, io::Write as _, num::NonZero, sync::Arc, time::SystemTime,
-};
+use std::{borrow::Cow, io::Write as _, num::NonZero, sync::Arc, time::SystemTime};
 use wgpu::*;
 use winit::{
     dpi::{LogicalSize, PhysicalSize},
@@ -48,12 +46,6 @@ pub struct Context {
     device: Device,
     compute_pipeline: ComputePipeline,
 
-    // SAFETY:
-    // This MUST be dropped BEFORE window.
-    // Wayland will segfault otherwise.
-    // `surface` drops its strong reference
-    // before it *fully* drops itself.
-    // See [here](https://github.com/gfx-rs/wgpu/pull/6997).
     surface: Surface<'static>,
     window: Arc<Window>,
     config: SurfaceConfiguration,
@@ -68,8 +60,7 @@ impl Context {
 
         let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::PRIMARY,
-            flags: InstanceFlags::from_env_or_default(),
-            backend_options: BackendOptions::from_env_or_default(),
+            ..Default::default()
         });
 
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -216,15 +207,10 @@ impl Context {
 
     /// Requests a device and queue from the specified adapter.
     fn request_device(adapter: &Adapter) -> (Device, Queue) {
-        block_on(adapter.request_device(
-            &DeviceDescriptor {
-                label: None,
-                required_features: Features::empty(),
-                required_limits: Limits::default().using_resolution(adapter.limits()),
-                memory_hints: MemoryHints::MemoryUsage,
-            },
-            None,
-        ))
+        block_on(adapter.request_device(&DeviceDescriptor {
+            required_limits: Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        }))
         .unwrap()
     }
 
@@ -357,7 +343,7 @@ impl Context {
             source: ShaderSource::Glsl {
                 shader: Cow::Borrowed(include_str!("shader.comp.glsl")),
                 stage: naga::ShaderStage::Compute,
-                defines: HashMap::default(),
+                defines: &[],
             },
         });
 
